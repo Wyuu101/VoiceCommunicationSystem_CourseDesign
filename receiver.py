@@ -1,6 +1,7 @@
 import socket
 import pyaudio
 import numpy as np
+import scipy.signal as signal
 from Crypto.Cipher import DES
 from Crypto.Util.Padding import unpad
 
@@ -76,11 +77,25 @@ def alaw_to_pcm16(alaw_bytes: bytes) -> np.ndarray:
     return out
 
 
-# ---------------- 网络与音频 ----------------
+
+
+
+# ---------------- 音频 ----------------
 RATE = 8000  # 采样率
 CHANNELS = 1  # 单声道
 FORMAT = pyaudio.paInt16  # 16-bit 格式
 CHUNK = 160  # 每次读取 160 个样本
+
+# ---------------- 滤波器 ----------------
+cutoff_freq = 3400  # 截止频率 (Hz)
+nyquist = 0.5 * RATE  # 奈奎斯特频率
+normalized_cutoff = cutoff_freq / nyquist  # 归一化截止频率
+filter_order = 128  # 滤波器阶数
+# 使用 firwin 设计低通滤波器
+fir_coeff = signal.firwin(filter_order, normalized_cutoff)
+
+
+
 
 p = pyaudio.PyAudio()
 stream_out = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, output=True, frames_per_buffer=CHUNK)  # 打开音频输出流
@@ -89,9 +104,17 @@ server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # 创建 UDP 套
 server_sock.bind(("0.0.0.0", 5005))  # 绑定到指定端口
 print("已开启音频流接收...")
 
+# 初始化滤波器状态
+zi = signal.lfilter_zi(fir_coeff, 1.0) * 0
+
 while True:
     data, _ = server_sock.recvfrom(4096)  # 接收数据
     decoded = hamming_decode_bytes(data)  # 对接收到的字节数据进行 Hamming(7,4) 解码
     alaw_enc = decrypt_des_cbc(decoded)  # 解密数据
     pcm = alaw_to_pcm16(alaw_enc)  # 将 A-law 解码为 PCM 数据
-    stream_out.write(pcm.tobytes())  # 播放音频
+    filtered_data, zi = signal.lfilter(fir_coeff, 1.0, pcm.astype(np.float32), zi=zi)
+    # 限制数据大小范围
+    filtered_data = np.clip(filtered_data, -32768, 32767)
+    # 将滤波后的数据转换回字节数据
+    filtered_bytes = filtered_data.astype(np.int16).tobytes()
+    stream_out.write(filtered_bytes)  # 播放音频
