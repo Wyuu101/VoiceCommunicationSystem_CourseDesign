@@ -1,0 +1,2 @@
+# VoiceCommunicationSystem_CourseDesign
+北京交通大学电子信息工程专业综合设计实验：语音通信系统
